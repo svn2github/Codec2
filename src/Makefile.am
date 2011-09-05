@@ -3,7 +3,7 @@ AUTOMAKE_OPTS = gnu
 NAME = codec2
 AM_CPPFLAGS = $(AM_CFLAGS)
 
-D=codebook
+D=$(top_srcdir)/src/codebook
 
 # lsp quantisers
 
@@ -41,7 +41,7 @@ CODEBOOKSDVQ= \
   $D/dlsp3.txt \
   $D/dlsp4.txt \
   $D/dlsp5.txt \
-  ../unittest/lspd678910.txt
+  $(top_srcdir)/unittest/lspd678910.txt
 
 noinst_PROGRAMS = generate_codebook
 
@@ -99,7 +99,9 @@ dump.h \
 lpc.h \
 nlp.h  \
 postfilter.h \
-sine.h
+sine.h \
+codec2_internal.h \
+glottal.c
 
 bin_PROGRAMS = c2demo c2enc c2dec c2sim
 

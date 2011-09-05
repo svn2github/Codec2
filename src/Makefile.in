@@ -217,7 +217,7 @@ AM_CFLAGS = -I../src -fPIC -Wall -O3
 AUTOMAKE_OPTS = gnu
 NAME = codec2
 AM_CPPFLAGS = $(AM_CFLAGS)
-D = codebook
+D = $(top_srcdir)/src/codebook
 
 # lsp quantisers
 CODEBOOKS = \
@@ -254,7 +254,7 @@ CODEBOOKSDVQ = \
   $D/dlsp3.txt \
   $D/dlsp4.txt \
   $D/dlsp5.txt \
-  ../unittest/lspd678910.txt
+  $(top_srcdir)/unittest/lspd678910.txt
 
 lib_LTLIBRARIES = libcodec2.la
 libcodec2_la_SOURCES = dump.c \
@@ -291,7 +291,9 @@ dump.h \
 lpc.h \
 nlp.h  \
 postfilter.h \
-sine.h
+sine.h \
+codec2_internal.h \
+glottal.c
 
 c2demo_SOURCES = c2demo.c
 c2demo_LDADD = $(lib_LTLIBRARIES) 
