@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=FreeDV
+Exec=freedv
+Icon=freedv
+Type=Application
+Terminal=false
+Categories=GTK;GNOME;AudioVideo;Audio;HamRadio;
+Comment=Digital Voice mode for HF Radio
