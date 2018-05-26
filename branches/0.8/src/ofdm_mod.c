@@ -16,7 +16,7 @@
   All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU Lesser General Public License version 2, as
+  it under the terms of the GNU Lesser General Public License version 2.1, as
   published by the Free Software Foundation.  This program is
   distributed in the hope that it will be useful, but WITHOUT ANY
   WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -75,6 +75,7 @@ int main(int argc, char *argv[])
                         "                      per frame.  In testframe mode (-t) raw and coded errors will be counted\n",
                                                coded_bits_per_frame, data_bits_per_frame);
         fprintf(stderr, "  --interleave depth  Interleave depth for LDPC frames, e.g. 1,2,4,8,16, default is 1\n");
+        fprintf(stderr, "  --txbpf             Transmit band pass filter\n");
         fprintf(stderr, "\n");
 	exit(1);
     }
@@ -133,6 +134,10 @@ int main(int argc, char *argv[])
         Nrows = Nsec*OFDM_RS;
         Nframes = floor((Nrows-1)/OFDM_NS);
         fprintf(stderr, "Nframes: %d\n", Nframes);
+    }
+
+    if (opt_exists(argv, argc, "--txbpf")) {
+        ofdm_set_tx_bpf(ofdm, 1);
     }
 
     /* main loop ----------------------------------------------------------------*/

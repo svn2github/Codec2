@@ -14,7 +14,7 @@
   All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU Lesser General Public License version 2, as
+  it under the terms of the GNU Lesser General Public License version 2.1, as
   published by the Free Software Foundation.  This program is
   distributed in the hope that it will be useful, but WITHOUT ANY
   WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -79,7 +79,9 @@ extern "C" {
 #define OFDM_MAX_SAMPLESPERFRAME (OFDM_SAMPLESPERFRAME + (OFDM_M + OFDM_NCP)/4)
 #define OFDM_RXBUF               (3 * OFDM_SAMPLESPERFRAME + 3 * (OFDM_M + OFDM_NCP))
 
-#define OFDM_TIMING_MX_THRESH    0.25
+/* See 700D Part 4 Acquisition blog post and ofdm_dev.m routinesfor how this was set */ 
+
+#define OFDM_TIMING_MX_THRESH    0.35
 
 /* reserve 4 bits/frame for auxillary text information */
 
@@ -113,12 +115,14 @@ struct OFDM {
     bool timing_en;
     bool foff_est_en;
     bool phase_est_en;
-
+    bool tx_bpf_en;
+    
     complex float pilot_samples[OFDM_M + OFDM_NCP];
     float   timing_norm;
     complex float W[OFDM_NC + 2][OFDM_M];
     complex float rxbuf[OFDM_RXBUF];
     complex float pilots[OFDM_NC + 2];
+    complex float *tx_bpf_buf;
     
     /* Demodulator data */
 

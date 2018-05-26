@@ -15,7 +15,7 @@
   All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU Lesser General Public License version 2, as
+  it under the terms of the GNU Lesser General Public License version 2.1, as
   published by the Free Software Foundation.  This program is
   distributed in the hope that it will be useful, but WITHOUT ANY
   WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -38,6 +38,7 @@
 #include "comp.h"
 #include "ofdm_internal.h"
 #include "codec2_ofdm.h"
+#include "ofdm_bpf_coeff.h"
 
 /* Concrete definition of 700D parameters */
 const struct OFDM_CONFIG OFDM_CONFIG_700D_C = 
@@ -211,7 +212,7 @@ struct OFDM *ofdm_create(const struct OFDM_CONFIG *config) {
     /* zero out Cyclic Prefix (CP) values */
 
     for (i = 0, j = (OFDM_M - OFDM_NCP); i < OFDM_NCP; i++, j++) {
-        ofdm->pilot_samples[i] = 0.0f + 0.0f * I;;
+        ofdm->pilot_samples[i] = 0.0f + 0.0f * I;
     }
         
     // From Octave: states.timing_norm = Npsam*(rate_fs_pilot_samples*rate_fs_pilot_samples');
@@ -236,12 +237,24 @@ struct OFDM *ofdm_create(const struct OFDM_CONFIG *config) {
     //fprintf(stderr, "timing_norm: %f\n", ofdm->timing_norm);
 
     ofdm->sig_var = ofdm->noise_var = 1.0f;
+
+    ofdm->tx_bpf_en = 0;
+    ofdm->tx_bpf_buf = (complex float*)malloc(sizeof(complex float)*(OFDM_BPF_N+OFDM_SAMPLESPERFRAME));
+    if (ofdm->tx_bpf_buf == NULL) {
+        free(ofdm);
+        return NULL;
+    }
+    
+    for (i=0; i<OFDM_BPF_N; i++) {
+        ofdm->tx_bpf_buf[i] = 0.0f + 0.0f * I;
+    }
     
     return ofdm; /* Success */
 }
 
 
 void ofdm_destroy(struct OFDM *ofdm) {
+    free(ofdm->tx_bpf_buf);
     free(ofdm);
 }
 
@@ -434,10 +447,11 @@ static int est_timing(struct OFDM *ofdm, complex float *rx, int length) {
  * ----------------------------------------------
  */
 
-void ofdm_txframe(struct OFDM *ofdm, complex float tx[OFDM_SAMPLESPERFRAME], complex float *tx_sym_lin) {
+void ofdm_txframe(struct OFDM *ofdm, complex float tx_filt[OFDM_SAMPLESPERFRAME], complex float *tx_sym_lin) {
     complex float aframe[OFDM_NS][OFDM_NC + 2];
     complex float asymbol[OFDM_M];
     complex float asymbol_cp[OFDM_M + OFDM_NCP];
+    complex float tx[OFDM_SAMPLESPERFRAME];
     int i, j, k, m;
 
     /* initialize aframe to complex zero */
@@ -490,6 +504,32 @@ void ofdm_txframe(struct OFDM *ofdm, complex float tx[OFDM_SAMPLESPERFRAME], com
             tx[m + j] = asymbol_cp[j];
         }
     }
+
+    /* optional Tx Band Pass Filter */
+
+    if (ofdm->tx_bpf_en) {
+        complex float *buf = ofdm->tx_bpf_buf;
+        for(i=0, j=OFDM_BPF_N; i<OFDM_SAMPLESPERFRAME; i++,j++) {
+            buf[j] = tx[i];
+            tx_filt[i] = 0.0;
+            for(k=0; k<OFDM_BPF_N; k++) {
+                tx_filt[i] += buf[j-k]*ofdm_bpf_coeff[k];
+            }
+        }
+
+        assert(j <= (OFDM_BPF_N+OFDM_SAMPLESPERFRAME));
+        
+        /* update filter memory */
+
+        for(i=0; i<OFDM_BPF_N; i++) {
+           buf[i] = buf[i+OFDM_SAMPLESPERFRAME];
+        }
+    } else {
+        for(i=0; i<OFDM_SAMPLESPERFRAME; i++) {
+            tx_filt[i] = tx[i];
+        }
+    }
+
 }
 
 int ofdm_get_nin(struct OFDM *ofdm) {
@@ -531,6 +571,10 @@ void ofdm_set_phase_est_enable(struct OFDM *ofdm, bool val) {
 
 void ofdm_set_off_est_hz(struct OFDM *ofdm, float val) {
     ofdm->foff_est_hz = val;
+}
+
+void ofdm_set_tx_bpf(struct OFDM *ofdm, bool val) {
+    ofdm->tx_bpf_en = val;
 }
 
 /*
@@ -604,7 +648,7 @@ int ofdm_sync_search(struct OFDM *ofdm, COMP *rxbuf_in)
     ofdm->coarse_foff_est_hz = est_freq_offset(ofdm,  &ofdm->rxbuf[st], (en - st), ct_est);
    
     if (ofdm->verbose) {
-        fprintf(stderr, "   ct_est: %4d foff_est: %3.1f timing_valid: %d timing_mx: %f\n",
+        fprintf(stderr, "   ct_est: %4d foff_est: %4.1f timing_valid: %d timing_mx: %5.4f\n",
                 ct_est, ofdm->coarse_foff_est_hz, ofdm->timing_valid, ofdm->timing_mx);
     }
 
@@ -678,8 +722,6 @@ void ofdm_demod(struct OFDM *ofdm, int *rx_bits, COMP *rxbuf_in) {
             work[j] = ofdm->rxbuf[i] * cexpf(-I * woff_est * i);
         }
 
-        /* note coarse sync just used for timing est, we dont use coarse_foff_est in this call */
-        
         ft_est = est_timing(ofdm, work, (en - st));
         ofdm->timing_est += (ft_est - ceilf(OFDM_FTWINDOWWIDTH / 2));
 
@@ -689,6 +731,13 @@ void ofdm_demod(struct OFDM *ofdm, int *rx_bits, COMP *rxbuf_in) {
            but stored for use in tofdm.c */
     
         ofdm->coarse_foff_est_hz = est_freq_offset(ofdm, &ofdm->rxbuf[st], (en-st), ft_est);
+
+        /* first frame in trial sync will have a better freq offset est - lets use it */
+
+        if (ofdm->frame_count == 0) {
+            ofdm->foff_est_hz = ofdm->coarse_foff_est_hz;
+            woff_est = TAU * ofdm->foff_est_hz / OFDM_FS;
+        }
         
         if (ofdm->verbose > 1) {
             fprintf(stderr, "  ft_est: %2d timing_est: %2d sample_point: %2d\n", ft_est, ofdm->timing_est, ofdm->sample_point);
@@ -1098,7 +1147,7 @@ void ofdm_sync_state_machine(struct OFDM *ofdm, int *rx_uw) {
            sync */
       
         if (!strcmp(ofdm->sync_state, "trial")) {
-            if (ofdm->uw_errors > 1) {
+            if (ofdm->uw_errors > 2) {
                 /* if we exceed thresh stay in trial sync */
                 ofdm->sync_counter++;
                 ofdm->frame_count = 0; 

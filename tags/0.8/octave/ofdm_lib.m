@@ -50,7 +50,7 @@ endfunction
   Can be used for acquisition (coarse timing), and fine timing.
 #}
 
-function [t_est timing_valid timing_mx] = est_timing(states, rx, rate_fs_pilot_samples)
+function [t_est timing_valid timing_mx av_level] = est_timing(states, rx, rate_fs_pilot_samples)
     ofdm_load_const;
     Npsam = length(rate_fs_pilot_samples);
 
@@ -74,8 +74,15 @@ function [t_est timing_valid timing_mx] = est_timing(states, rx, rate_fs_pilot_s
     timing_valid = timing_mx > timing_mx_thresh;
     
     if verbose > 1
-      printf("  av_level: %f mx: %f timing_est: %d timing_valid: %d\n", av_level, timing_mx, t_est, timing_valid);
+      printf("  av_level: %5.4f mx: %4.3f timing_est: %4d timing_valid: %d\n", av_level, timing_mx, t_est, timing_valid);
     end
+    if verbose > 2
+      figure(3); clf;
+      subplot(211); plot(rx)
+      subplot(212); plot(corr)
+      figure(4); clf; plot(real(rate_fs_pilot_samples));
+    end
+
 
 endfunction
 
@@ -418,6 +425,11 @@ function [rx_bits states aphase_est_pilot_log rx_np rx_amp] = ofdm_demod(states,
     % we supply it with uncorrected rxbuf
     
     [coarse_foff_est_hz states] = est_freq_offset(states, rxbuf(st:en), states.rate_fs_pilot_samples, ft_est);
+    if states.frame_count == 0
+       % first frame in trial sync will have a better freq offset est - lets use it
+       foff_est_hz = states.foff_est_hz = coarse_foff_est_hz;
+       woff_est = 2*pi*foff_est_hz/Fs;
+    end
     
     if timing_valid
       timing_est = timing_est + ft_est - ceil(ftwindow_width/2);
@@ -482,34 +494,39 @@ function [rx_bits states aphase_est_pilot_log rx_np rx_amp] = ofdm_demod(states,
     foff_est_hz = foff_est_hz + foff_est_gain*freq_err_hz;
   end
 
-  % OK - now estimate and correct phase  ----------------------------------
+  % OK - now channel for each carrier and correct phase  ----------------------------------
 
-  aphase_est_pilot = 10*ones(1,Nc+2);
-  aamp_est_pilot = zeros(1,Nc+2);
+  achannel_est_rect = zeros(1,Nc+2);
   for c=2:Nc+1
 
-    % estimate phase using average of 6 pilots in a rect 2D window centred
-    % on this carrier
-    % PPP
+    % estimate channel for this carrier using an average of 12 pilots
+    % in a rect 2D window centred on this carrier
+    
+    % PPP  <-- frame-1
+    % ---
+    % PPP  <-- you are here
     % DDD
     % DDD
-    % PPP
-          
+    % PPP  <-- frame+1
+    % ---
+    % PPP  <-- frame+2
+    
     cr = c-1:c+1;
-    aphase_est_pilot_rect = sum(rx_sym(2,cr)*pilots(cr)') + sum(rx_sym(2+Ns,cr)*pilots(cr)');
+    achannel_est_rect(c) =  sum(rx_sym(2,cr)*pilots(cr)');      % frame
+    achannel_est_rect(c) =+ sum(rx_sym(2+Ns,cr)*pilots(cr)');   % frame+1
 
     % use next step of pilots in past and future
 
-    aphase_est_pilot_rect += sum(rx_sym(1,cr)*pilots(cr)');
-    aphase_est_pilot_rect += sum(rx_sym(2+Ns+1,cr)*pilots(cr)');
-    
-    aphase_est_pilot(c) = angle(aphase_est_pilot_rect);
-
-    % amplitude is estimated over 12 pilot symbols, so find average
-
-    aamp_est_pilot(c) = abs(aphase_est_pilot_rect/12);
+    achannel_est_rect(c) += sum(rx_sym(1,cr)*pilots(cr)');      % frame-1
+    achannel_est_rect(c) += sum(rx_sym(2+Ns+1,cr)*pilots(cr)'); % frame+2
   end
-  
+
+  % pilots are estimated over 12 pilot symbols, so find average
+
+  achannel_est_rect /= 12;
+  aphase_est_pilot = angle(achannel_est_rect);
+  aamp_est_pilot = abs(achannel_est_rect);
+
   % correct phase offset using phase estimate, and demodulate
   % bits, separate loop as it runs across cols (carriers) to get
   % frame bit ordering correct
@@ -589,7 +606,8 @@ function [rx_bits states aphase_est_pilot_log rx_np rx_amp] = ofdm_demod(states,
   % maintain mean amp estimate for LDPC decoder
 
   states.mean_amp = 0.9*states.mean_amp + 0.1*mean(rx_amp);
-  
+
+  states.achannel_est_rect = achannel_est_rect;
   states.rx_sym = rx_sym;
   states.rxbuf = rxbuf;
   states.nin = nin;
@@ -807,7 +825,7 @@ function states = sync_state_machine(states, rx_uw)
     states.uw_errors = sum(xor(tx_uw,rx_uw));
 
     if strcmp(states.sync_state,'trial')
-      if states.uw_errors > 1
+      if states.uw_errors > 2
         states.sync_counter++;
         states.frame_count = 0;
       end
@@ -852,3 +870,44 @@ function acc = test_acc(v)
   end
   acc = sre + j*sim;
 end
+
+
+% Get rid of nasty unfiltered stuff either side of OFDM signal
+% This may need to be tweaked, or better yet made a function of Nc, if Nc changes
+%
+% usage:
+%  ofdm_lib; make_ofdm_bpf(1);
+
+function bpf_coeff = make_ofdm_bpf(write_c_header_file)
+  filt_n = 100;
+  Fs = 8000;
+
+  bpf_coeff  = fir2(filt_n,[0 900 1000 2000 2100 4000]/(Fs/2),[0.001 0.001 1 1 0.001 0.001]);
+
+  if write_c_header_file
+    figure(1)
+    clf;
+    h = freqz(bpf_coeff,1,Fs/2);
+    plot(20*log10(abs(h)))
+    grid minor
+
+    % save coeffs to a C header file
+
+    f=fopen("../src/ofdm_bpf_coeff.h","wt");
+    fprintf(f,"/* 1000 - 2000 Hz FIR filter coeffs */\n");
+    fprintf(f,"/* Generated by make_ofdm_bpf() in ofdm_lib.m */\n");
+
+    fprintf(f,"\n#define OFDM_BPF_N %d\n\n", filt_n);
+
+    fprintf(f,"float ofdm_bpf_coeff[]={\n");
+    for r=1:filt_n
+      if r < filt_n
+        fprintf(f, "  %f,\n",  bpf_coeff(r));
+      else
+        fprintf(f, "  %f\n};", bpf_coeff(r));
+      end
+    end
+    fclose(f);
+  end
+
+endfunction
